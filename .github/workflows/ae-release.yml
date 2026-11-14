@@ -1,0 +1,64 @@
+name: AE release (macOS)
+
+# Builds an optimized, ad-hoc signed OpenConductor.app and publishes it as a GitHub release.
+# downloads.agenticengineering.agency (OpenReasonMachines/cloudflare/downloads) mirrors the latest
+# release into R2 every 15 minutes, using release.json. No Cloudflare credentials live here.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ae-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # Same as upstream package-macos.yml: stale path-crate artifacts after a cache restore.
+      - name: Rebuild path crates
+        working-directory: src-tauri
+        run: cargo clean -p oc-scripts -p openconductor-db
+      - run: npm ci
+      - name: Build and sign (release, ad-hoc, hardened runtime)
+        run: |
+          scripts/package-macos.sh --release --identity - | tee build.log
+          echo "APP=$(tail -1 build.log)" >> "$GITHUB_ENV"
+      - name: Check the bundle against the packaging contract
+        run: python3 tools/check_macos_bundle.py "$APP" --signing adhoc --report bundle-check.json
+      - name: Package
+        run: |
+          set -euo pipefail
+          ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          tag="v${ver}-ae.${GITHUB_RUN_NUMBER}"
+          zip="OpenConductor-${ver}-ae.${GITHUB_RUN_NUMBER}-macos-arm64.zip"
+          ditto -c -k --keepParent "$APP" "$zip"
+          sha=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+          size=$(stat -f%z "$zip")
+          cat > release.json <<JSON
+          {"tag":"$tag","version":"$ver","commit":"$GITHUB_SHA","builtAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","run":"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID","assets":[{"name":"$zip","sha256":"$sha","size":$size,"platform":"macos-arm64","signing":"ad-hoc, not notarized"}]}
+          JSON
+          cat release.json
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" "$ZIP" release.json bundle-check.json \
+            --title "OpenConductor $TAG (Agentic Engineering build)" \
+            --notes "Ad-hoc signed, not notarized. macOS blocks it on first open: right-click the app and choose Open, or run xattr -dr com.apple.quarantine OpenConductor.app. Built from $GITHUB_SHA." \
+            --latest
