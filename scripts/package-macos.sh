@@ -33,7 +33,8 @@ echo "signing identity: $identity"
 [[ -d node_modules ]] || npm ci
 # Third-party tools for Contents/Resources/bin (pinned gh), declared in tauri.bundle.conf.json.
 scripts/fetch-bundled-tools.sh
-npx --no-install tauri build "${profile[@]}" --bundles app --config src-tauri/tauri.bundle.conf.json
+# ${profile[@]+...}: bash 3.2 (macOS /bin/bash) treats an empty array as unbound under set -u.
+npx --no-install tauri build ${profile[@]+"${profile[@]}"} --bundles app --config src-tauri/tauri.bundle.conf.json
 
 app=src-tauri/target/$outdir/bundle/macos/OpenConductor.app
 codesign --verify --deep --strict --verbose=2 "$app"

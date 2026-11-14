@@ -14,6 +14,11 @@ concurrency:
   group: ae-release
   cancel-in-progress: false
 
+defaults:
+  run:
+    # Explicit bash adds -o pipefail, so a failing build is not hidden by tee.
+    shell: bash
+
 jobs:
   release:
     runs-on: macos-latest
